@@ -1,0 +1,80 @@
+version: "3.9"
+
+services:
+  asterisk:
+    image: andrius/asterisk:latest       # swap for a pinned production image
+    container_name: callflowpro-asterisk
+    restart: unless-stopped
+    network_mode: host                  # required for RTP/SIP NAT handling
+    volumes:
+      - ./configs:/etc/asterisk
+      - ./sounds/custom-prompts:/var/lib/asterisk/sounds/custom-prompts
+      - asterisk-spool:/var/spool/asterisk
+      - asterisk-log:/var/log/asterisk
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - TZ=Asia/Karachi
+    healthcheck:
+      test: ["CMD", "asterisk", "-rx", "core show version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  mysql:
+    image: mysql:8.0
+    container_name: callflowpro-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-CHANGE_ME_ROOT}
+      MYSQL_DATABASE: callflow_db
+      MYSQL_USER: callflow_user
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-CHANGE_ME}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  monitoring:
+    build:
+      context: .
+      dockerfile: docker/monitoring.Dockerfile
+    container_name: callflowpro-monitoring
+    restart: unless-stopped
+    depends_on:
+      - asterisk
+      - mysql
+    environment:
+      - AMI_HOST=asterisk
+      - DB_HOST=mysql
+      - ALERT_WEBHOOK=${ALERT_WEBHOOK:-}
+    volumes:
+      - ./scripts:/opt/callflowpro/scripts:ro
+      - callflow-logs:/var/log/callflowpro
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: callflowpro-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-CHANGE_ME}
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - mysql
+
+volumes:
+  asterisk-spool:
+  asterisk-log:
+  mysql-data:
+  grafana-data:
+  callflow-logs:
